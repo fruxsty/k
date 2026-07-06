@@ -12,6 +12,7 @@ local OriginalCameraType = Camera.CameraType
 local OriginalCameraSubject = Camera.CameraSubject
 local Character, Humanoid, RootPart
 
+
 local Config = {
     WindowTitle = "Legit Dat V2 Admin",
     WindowWidth = 480,
@@ -32,11 +33,14 @@ local Config = {
         Red = Color3.fromRGB(180, 70, 60),
         Line = Color3.fromRGB(220, 180, 120)
     },
+    
     FlightKey = Enum.KeyCode.F,
     NoClipKey = Enum.KeyCode.N,
     FollowKey = Enum.KeyCode.H,
     BringTargetKey = Enum.KeyCode.T,
     BringAllKey = Enum.KeyCode.Z,
+    FlingerKey = Enum.KeyCode.C,
+    
     FlightActive = false,
     FlightSpeed = 60,
     FlightBoost = 2.5,
@@ -56,10 +60,16 @@ local Config = {
     BringHeight = 12,
     SelectedTargets = {},
     Spectating = false,
-    CurrentSpectate = nil
+    CurrentSpectate = nil,
+    
+    FlingerActive = false,
+    FlingerX = 68756,
+    FlingerY = 100,
+    FlingerZ = -344
 }
 
 local Loops = {}
+
 
 local function StopLoop(loop)
     if loop then loop:Disconnect() end
@@ -72,6 +82,100 @@ local function GetCharacter()
     return Humanoid and Humanoid.Health > 0
 end
 
+
+local function ToggleFlight(state)
+    Config.FlightActive = state
+    if state then
+        if not GetCharacter() then return end
+        Humanoid.PlatformStand = true
+        Humanoid.WalkSpeed = 0
+        Humanoid.JumpPower = 0
+
+        local bv = Instance.new("BodyVelocity", RootPart)
+        bv.Name = "FlightBV"
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bv.Velocity = Vector3.zero
+        bv.Parent = RootPart
+
+        local bg = Instance.new("BodyGyro", RootPart)
+        bg.Name = "FlightBG"
+        bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+        bg.P = 9000
+        bg.CFrame = RootPart.CFrame
+        bg.Parent = RootPart
+
+        Loops.Flight = RunService.RenderStepped:Connect(function()
+            if not Config.FlightActive or not GetCharacter() then return end
+            local move = Vector3.new()
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += Camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= Camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= Camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += Camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move -= Vector3.new(0, 1, 0) end
+            local speed = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) and Config.FlightSpeed * Config.FlightBoost or Config.FlightSpeed
+            bv.Velocity = move.Magnitude > 0 and move.Unit * speed or Vector3.zero
+            bg.CFrame = CFrame.new(RootPart.Position, RootPart.Position + Camera.CFrame.LookVector)
+        end)
+    else
+        StopLoop(Loops.Flight)
+        if GetCharacter() then
+            
+            Humanoid.PlatformStand = false
+            Humanoid.WalkSpeed = 16
+            Humanoid.JumpPower = 50
+            Humanoid.AutoRotate = true
+            Humanoid:ChangeState(Enum.HumanoidStateType.Running)
+
+            
+            if RootPart:FindFirstChild("FlightBV") then RootPart.FlightBV:Destroy() end
+            if RootPart:FindFirstChild("FlightBG") then RootPart.FlightBG:Destroy() end
+            if RootPart:FindFirstChildOfClass("BodyVelocity") then RootPart:FindFirstChildOfClass("BodyVelocity"):Destroy() end
+            if RootPart:FindFirstChildOfClass("BodyGyro") then RootPart:FindFirstChildOfClass("BodyGyro"):Destroy() end
+        end
+    end
+    StarterGui:SetCore("SendNotification", {Title = "Flight", Text = state and "Enabled" or "Disabled", Duration = 2})
+end
+
+local function ToggleNoClip(state)
+    Config.NoClipActive = state
+    if state then
+        Loops.NoClip = RunService.Heartbeat:Connect(function()
+            if GetCharacter() then
+                for _, part in ipairs(Character:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+            end
+        end)
+    else
+        StopLoop(Loops.NoClip)
+        if GetCharacter() then
+            for _, part in ipairs(Character:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = true end
+            end
+        end
+    end
+    StarterGui:SetCore("SendNotification", {Title = "NoClip", Text = state and "Enabled" or "Disabled", Duration = 2})
+end
+
+local function ToggleFlinger(state)
+    Config.FlingerActive = state
+    if state then
+        if not GetCharacter() then return end
+        Loops.Flinger = RunService.Heartbeat:Connect(function()
+            if not Config.FlingerActive or not RootPart then return end
+            local originalVel = RootPart.Velocity
+            RootPart.Velocity = Vector3.new(Config.FlingerX, Config.FlingerY, Config.FlingerZ)
+            RunService.RenderStepped:Wait()
+            RootPart.Velocity = originalVel
+        end)
+    else
+        StopLoop(Loops.Flinger)
+    end
+    StarterGui:SetCore("SendNotification", {Title = "Fling", Text = state and "Enabled" or "Disabled", Duration = 2})
+end
+
+-- [Rest of helper functions remain the same]
 local function GetAimPart(plr)
     if not plr or not plr.Character then return nil end
     return Config.AimPart == "Head" and plr.Character:FindFirstChild("Head")
@@ -100,7 +204,6 @@ local function GetClosestPlayer()
 
         local dist3D = (part.Position - camPos).Magnitude
         if dist3D > Config.AimRange then continue end
-
         if Config.AimOnlyVisible and not IsVisible(part.Position) then continue end
 
         local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
@@ -131,26 +234,21 @@ local function ReturnPlayer(plr)
     local root = plr.Character:FindFirstChild("HumanoidRootPart")
     local hum = plr.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum then return end
-
     for _, obj in ipairs(root:GetChildren()) do
         if obj:IsA("BodyPosition") or obj:IsA("BodyGyro") or obj:IsA("BodyVelocity")
-        or obj:IsA("AlignPosition") or obj:IsA("AlignOrientation") or obj.Name == "BringValue" then
+        or obj:IsA("AlignPosition") or obj:IsA("AlignOrientation") then
             obj:Destroy()
         end
     end
-
     hum.PlatformStand = false
     hum.WalkSpeed = 16
     hum.JumpPower = 50
     hum.AutoRotate = true
-    hum:ChangeState(Enum.HumanoidStateType.Running)
 end
 
 local function ReturnAllBrought()
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            ReturnPlayer(plr)
-        end
+        if plr ~= LocalPlayer then ReturnPlayer(plr) end
     end
 end
 
@@ -159,18 +257,15 @@ local function BringPlayer(plr, index)
     local root = plr.Character:FindFirstChild("HumanoidRootPart")
     local hum = plr.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return end
-
     hum.PlatformStand = true
     hum.WalkSpeed = 0
     hum.JumpPower = 0
     hum.AutoRotate = false
-
     local offset = -RootPart.CFrame.RightVector * Config.BringSpacing
     local targetPos = RootPart.Position + offset * (index - 1) + Vector3.new(0, Config.BringHeight, 0)
-    local targetCFrame = CFrame.new(targetPos, RootPart.Position)
-
-    root.CFrame = targetCFrame
+    root.CFrame = CFrame.new(targetPos, RootPart.Position)
 end
+
 
 local MainGui = Instance.new("ScreenGui")
 MainGui.Name = "LegitDatUI"
@@ -298,9 +393,7 @@ end)
 
 local function ClearContent()
     for _, child in ipairs(Content:GetChildren()) do
-        if child ~= ContentLayout and not child:IsA("UIListLayout") then
-            child:Destroy()
-        end
+        if child ~= ContentLayout and not child:IsA("UIListLayout") then child:Destroy() end
     end
 end
 
@@ -361,6 +454,8 @@ local function AddToggle(name, default, callback)
         btn.BackgroundColor3 = default and Config.Colors.Green or Config.Colors.Red
         callback(default)
     end)
+
+    return btn
 end
 
 local function AddKeybind(name, default, callback)
@@ -456,72 +551,29 @@ local function AddSlider(name, default, min, max, callback)
     end)
 end
 
+local ToggleButtons = {}
+
 local function LoadMainTab()
     ClearContent()
+    ToggleButtons = {}
 
     AddSection("MOVEMENT")
-    AddToggle("Flight", false, function(v)
-        Config.FlightActive = v
-        if v then
-            if not GetCharacter() then return end
-            Humanoid.PlatformStand = true
-            local bv = Instance.new("BodyVelocity", RootPart)
-            bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-            local bg = Instance.new("BodyGyro", RootPart)
-            bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-            bg.P = 9000
-            Loops.Flight = RunService.RenderStepped:Connect(function()
-                if not Config.FlightActive or not GetCharacter() then return end
-                local move = Vector3.new()
-                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += Camera.CFrame.LookVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= Camera.CFrame.LookVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= Camera.CFrame.RightVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += Camera.CFrame.RightVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
-                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move -= Vector3.new(0, 1, 0) end
-                local speed = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) and Config.FlightSpeed * Config.FlightBoost or Config.FlightSpeed
-                bv.Velocity = move.Magnitude > 0 and move.Unit * speed or Vector3.zero
-                bg.CFrame = CFrame.new(RootPart.Position, RootPart.Position + Camera.CFrame.LookVector)
-            end)
-        else
-            StopLoop(Loops.Flight)
-            if GetCharacter() then
-                Humanoid.PlatformStand = false
-                RootPart:FindFirstChildOfClass("BodyVelocity"):Destroy()
-                RootPart:FindFirstChildOfClass("BodyGyro"):Destroy()
-            end
-        end
-    end)
+    ToggleButtons.Flight = AddToggle("Flight", Config.FlightActive, ToggleFlight)
     AddSlider("Flight Speed", Config.FlightSpeed, 20, 500, function(v) Config.FlightSpeed = v end)
     AddSlider("Flight Boost", Config.FlightBoost, 1, 10, function(v) Config.FlightBoost = v end)
 
-    AddToggle("NoClip", false, function(v)
-        Config.NoClipActive = v
-        if v then
-            Loops.NoClip = RunService.Heartbeat:Connect(function()
-                if GetCharacter() then
-                    for _, part in ipairs(Character:GetDescendants()) do
-                        if part:IsA("BasePart") then part.CanCollide = false end
-                    end
-                end
-            end)
-        else
-            StopLoop(Loops.NoClip)
-            if GetCharacter() then
-                for _, part in ipairs(Character:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = true end
-                end
-            end
-        end
-    end)
+    ToggleButtons.NoClip = AddToggle("NoClip", Config.NoClipActive, ToggleNoClip)
+
+    AddSection("FLINGER")
+    ToggleButtons.Flinger = AddToggle("Flinger", Config.FlingerActive, ToggleFlinger)
+    AddSlider("Flinger X", Config.FlingerX, -200000, 200000, function(v) Config.FlingerX = v end)
+    AddSlider("Flinger Y", Config.FlingerY, -200000, 200000, function(v) Config.FlingerY = v end)
+    AddSlider("Flinger Z", Config.FlingerZ, -200000, 200000, function(v) Config.FlingerZ = v end)
 
     AddSection("AIM ASSIST")
-    AddToggle("Aim Lock", false, function(v)
+    AddToggle("Lock", Config.AimLockEnabled, function(v)
         Config.AimLockEnabled = v
-        if not v then
-            Config.AimLockHeld = false
-            StopLoop(Loops.AimLock)
-        end
+        StarterGui:SetCore("SendNotification", {Title = "Aim Lock", Text = v and "Enabled" or "Disabled", Duration = 2})
     end)
     AddToggle("Only Aim Visible Players", Config.AimOnlyVisible, function(v) Config.AimOnlyVisible = v end)
     AddSlider("FOV Range", Config.AimFOV, 20, 180, function(v) Config.AimFOV = v end)
@@ -529,13 +581,11 @@ local function LoadMainTab()
     AddSlider("Max Range", Config.AimRange, 100, 3000, function(v) Config.AimRange = v end)
 
     AddSection("PLAYER CONTROL")
-    AddToggle("Follow Selected", false, function(v)
+    AddToggle("Follow Selected", Config.FollowActive, function(v)
         Config.FollowActive = v
         if v then
-            if #Config.SelectedTargets == 0 then
-                StarterGui:SetCore("SendNotification", {Title = "Follow", Text = "Select players first!", Duration = 2})
-                return
-            end
+            if #Config.SelectedTargets == 0 then StarterGui:SetCore("SendNotification", {Title = "Follow", Text = "Select players first!", Duration = 2}) return end
+            if not GetCharacter() then return end
             Loops.Follow = RunService.Heartbeat:Connect(function()
                 if not GetCharacter() or #Config.SelectedTargets == 0 then return end
                 local t = Config.SelectedTargets[1]
@@ -547,61 +597,45 @@ local function LoadMainTab()
         else
             StopLoop(Loops.Follow)
         end
+        StarterGui:SetCore("SendNotification", {Title = "Follow", Text = v and "Enabled" or "Disabled", Duration = 2})
     end)
 
     AddSlider("Bring Spacing", Config.BringSpacing, 1, 15, function(v) Config.BringSpacing = v end)
     AddSlider("Bring Height", Config.BringHeight, 0, 50, function(v) Config.BringHeight = v end)
 
-    AddToggle("Bring Selected", false, function(v)
+    AddToggle("Bring Selected", Config.BringTargetActive, function(v)
         Config.BringTargetActive = v
         if v then
-            if #Config.SelectedTargets == 0 then
-                StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Select players in Players tab first!", Duration = 3})
-                return
-            end
-            if not GetCharacter() then
-                StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Load your character first!", Duration = 2})
-                return
-            end
+            if #Config.SelectedTargets == 0 then StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Select players first!", Duration = 2}) return end
+            if not GetCharacter() then return end
             ReturnAllBrought()
             Loops.BringTarget = RunService.Heartbeat:Connect(function()
                 if not GetCharacter() then return end
-                for i, plr in ipairs(Config.SelectedTargets) do
-                    BringPlayer(plr, i)
-                end
+                for i, plr in ipairs(Config.SelectedTargets) do BringPlayer(plr, i) end
             end)
-            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring Selected ON", Duration = 2})
         else
             StopLoop(Loops.BringTarget)
             ReturnAllBrought()
-            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring Selected OFF", Duration = 2})
         end
+        StarterGui:SetCore("SendNotification", {Title = "Bring Selected", Text = v and "Enabled" or "Disabled", Duration = 2})
     end)
 
-    AddToggle("Bring All", false, function(v)
+    AddToggle("Bring All", Config.BringAllActive, function(v)
         Config.BringAllActive = v
         if v then
-            if not GetCharacter() then
-                StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Load your character first!", Duration = 2})
-                return
-            end
+            if not GetCharacter() then return end
             ReturnAllBrought()
             Loops.BringAll = RunService.Heartbeat:Connect(function()
                 if not GetCharacter() then return end
                 local list = {}
-                for _, plr in ipairs(Players:GetPlayers()) do
-                    if plr ~= LocalPlayer then table.insert(list, plr) end
-                end
-                for i, plr in ipairs(list) do
-                    BringPlayer(plr, i)
-                end
+                for _, plr in ipairs(Players:GetPlayers()) do if plr ~= LocalPlayer then table.insert(list, plr) end end
+                for i, plr in ipairs(list) do BringPlayer(plr, i) end
             end)
-            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring All ON", Duration = 2})
         else
             StopLoop(Loops.BringAll)
             ReturnAllBrought()
-            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring All OFF", Duration = 2})
         end
+        StarterGui:SetCore("SendNotification", {Title = "Bring All", Text = v and "Enabled" or "Disabled", Duration = 2})
     end)
 end
 
@@ -629,9 +663,7 @@ local function LoadPlayersTab()
     end)
 
     local function RefreshPlayers()
-        for _, child in ipairs(listFrame:GetChildren()) do
-            if child ~= listLayout then child:Destroy() end
-        end
+        for _, child in ipairs(listFrame:GetChildren()) do if child ~= listLayout then child:Destroy() end end
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr == LocalPlayer then continue end
             local row = Instance.new("Frame")
@@ -738,6 +770,7 @@ local function LoadSettingsTab()
     AddKeybind("Follow Key", Config.FollowKey, function(v) Config.FollowKey = v end)
     AddKeybind("Bring Selected Key", Config.BringTargetKey, function(v) Config.BringTargetKey = v end)
     AddKeybind("Bring All Key", Config.BringAllKey, function(v) Config.BringAllKey = v end)
+    AddKeybind("Flinger Toggle Key", Config.FlingerKey, function(v) Config.FlingerKey = v end)
 end
 
 local function SwitchTab(tabName)
@@ -770,35 +803,66 @@ MinBtn.MouseButton1Click:Connect(function()
     end
 end)
 
-UserInputService.InputBegan:Connect(function(i, processed)
+
+UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
-    if i.KeyCode == Config.MenuToggleKey then
+
+    if input.KeyCode == Config.MenuToggleKey then
         Config.MenuVisible = not Config.MenuVisible
         Main.Visible = Config.MenuVisible
         StarterGui:SetCore("SendNotification", {Title = "Menu", Text = Config.MenuVisible and "Opened" or "Closed", Duration = 1})
         return
     end
-    if i.KeyCode == Enum.KeyCode.Escape and Config.Spectating then
+
+    if input.KeyCode == Config.FlightKey then
+        local newState = not Config.FlightActive
+        ToggleFlight(newState)
+        if ToggleButtons.Flight then
+            ToggleButtons.Flight.Text = newState and "ON" or "OFF"
+            ToggleButtons.Flight.BackgroundColor3 = newState and Config.Colors.Green or Config.Colors.Red
+        end
+        return
+    end
+
+    if input.KeyCode == Config.NoClipKey then
+        local newState = not Config.NoClipActive
+        ToggleNoClip(newState)
+        if ToggleButtons.NoClip then
+            ToggleButtons.NoClip.Text = newState and "ON" or "OFF"
+            ToggleButtons.NoClip.BackgroundColor3 = newState and Config.Colors.Green or Config.Colors.Red
+        end
+        return
+    end
+
+    if input.KeyCode == Config.FlingerKey then
+        local newState = not Config.FlingerActive
+        ToggleFlinger(newState)
+        if ToggleButtons.Flinger then
+            ToggleButtons.Flinger.Text = newState and "ON" or "OFF"
+            ToggleButtons.Flinger.BackgroundColor3 = newState and Config.Colors.Green or Config.Colors.Red
+        end
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.Escape and Config.Spectating then
         StopSpectate()
     end
 end)
 
-UserInputService.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton2 then
-        if Config.AimLockEnabled then
-            Config.AimLockHeld = true
-            Loops.AimLock = RunService.RenderStepped:Connect(function()
-                local target = GetClosestPlayer()
-                if target then
-                    Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), Config.AimSmooth)
-                end
-            end)
-        end
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 and Config.AimLockEnabled then
+        Config.AimLockHeld = true
+        Loops.AimLock = RunService.RenderStepped:Connect(function()
+            local target = GetClosestPlayer()
+            if target then
+                Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), Config.AimSmooth)
+            end
+        end)
     end
 end)
 
-UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton2 then
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
         Config.AimLockHeld = false
         StopLoop(Loops.AimLock)
     end
@@ -808,7 +872,21 @@ CloseBtn.MouseButton1Click:Connect(function()
     StopSpectate()
     ReturnAllBrought()
     for _, loop in pairs(Loops) do StopLoop(loop) end
+    if GetCharacter() then
+        Humanoid.PlatformStand = false
+        Humanoid.WalkSpeed = 16
+        Humanoid.JumpPower = 50
+        Humanoid.AutoRotate = true
+        for _, obj in ipairs(RootPart:GetChildren()) do
+            if obj:IsA("BodyVelocity") or obj:IsA("BodyGyro") then obj:Destroy() end
+        end
+    end
     MainGui:Destroy()
+end)
+
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if Config.FlightActive then ToggleFlight(false) end
 end)
 
 SwitchTab("Main")
