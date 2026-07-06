@@ -1,0 +1,835 @@
+ocal Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+local Camera = Workspace.CurrentCamera
+local OriginalCameraType = Camera.CameraType
+local OriginalCameraSubject = Camera.CameraSubject
+local Character, Humanoid, RootPart
+
+local Config = {
+    WindowTitle = "Legit Dat V2 Admin",
+    WindowWidth = 480,
+    WindowHeight = 740,
+    CurrentTab = "Main",
+    MenuVisible = true,
+    MenuToggleKey = Enum.KeyCode.Insert,
+    Colors = {
+        Main = Color3.fromRGB(255, 248, 230),
+        Title = Color3.fromRGB(245, 235, 215),
+        TabActive = Color3.fromRGB(222, 203, 165),
+        TabInactive = Color3.fromRGB(238, 228, 205),
+        Section = Color3.fromRGB(248, 240, 222),
+        Element = Color3.fromRGB(252, 245, 230),
+        Text = Color3.fromRGB(60, 50, 35),
+        Accent = Color3.fromRGB(205, 175, 130),
+        Green = Color3.fromRGB(100, 160, 80),
+        Red = Color3.fromRGB(180, 70, 60),
+        Line = Color3.fromRGB(220, 180, 120)
+    },
+    -- Keybinds
+    FlightKey = Enum.KeyCode.F,
+    NoClipKey = Enum.KeyCode.N,
+    FollowKey = Enum.KeyCode.H,
+    BringTargetKey = Enum.KeyCode.T,
+    BringAllKey = Enum.KeyCode.Z,
+
+    FlightActive = false,
+    FlightSpeed = 60,
+    FlightBoost = 2.5,
+    NoClipActive = false,
+    AimLockEnabled = false,
+    AimLockHeld = false,
+    AimPart = "Head",
+    AimSmooth = 0.25,
+    AimFOV = 90,
+    AimRange = 800,
+    AimOnlyVisible = true,
+    FollowActive = false,
+    FollowDist = 7,
+    BringTargetActive = false,
+    BringAllActive = false,
+    BringSpacing = 3,
+    BringHeight = 12,
+    SelectedTargets = {},
+    Spectating = false,
+    CurrentSpectate = nil
+}
+
+local Loops = {}
+
+local function StopLoop(loop)
+    if loop then loop:Disconnect() end
+end
+
+local function GetCharacter()
+    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    Humanoid = Character:FindFirstChildOfClass("Humanoid")
+    RootPart = Character:FindFirstChild("HumanoidRootPart")
+    return Humanoid and Humanoid.Health > 0
+end
+
+local function GetAimPart(plr)
+    if not plr or not plr.Character then return nil end
+    return Config.AimPart == "Head" and plr.Character:FindFirstChild("Head")
+        or plr.Character:FindFirstChild("UpperTorso")
+        or plr.Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsVisible(targetPos)
+    if not GetCharacter() or not RootPart then return false end
+    local eyePos = Camera.CFrame.Position
+    local ray = Ray.new(eyePos, (targetPos - eyePos).Unit * Config.AimRange)
+    local hit = Workspace:FindPartOnRayWithIgnoreList(ray, {Character, Camera})
+    return not hit or (hit.Position - targetPos).Magnitude < 2
+end
+
+local function GetClosestPlayer()
+    local closest, bestDist = nil, math.huge
+    local camPos = Camera.CFrame.Position
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local part = GetAimPart(plr)
+        local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+        if not part or not hum or hum.Health <= 0 then continue end
+
+        local dist3D = (part.Position - camPos).Magnitude
+        if dist3D > Config.AimRange then continue end
+
+        if Config.AimOnlyVisible and not IsVisible(part.Position) then continue end
+
+        local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen or sp.Z < 1 then continue end
+
+        local dist2D = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+        local fovRadius = math.tan(math.rad(Config.AimFOV / 2)) * (Camera.ViewportSize.Y / 2)
+        if dist2D < bestDist and dist2D <= fovRadius then
+            bestDist = dist2D
+            closest = part
+        end
+    end
+    return closest
+end
+
+local function StopSpectate()
+    if Config.Spectating then
+        Camera.CameraType = OriginalCameraType
+        Camera.CameraSubject = OriginalCameraSubject
+        Config.Spectating = false
+        Config.CurrentSpectate = nil
+        StarterGui:SetCore("SendNotification", {Title = "Legit Dat", Text = "Stopped spectating", Duration = 2})
+    end
+end
+
+-- ✅ Reset player properly
+local function ReturnPlayer(plr)
+    if not plr or not plr.Character then return end
+    local root = plr.Character:FindFirstChild("HumanoidRootPart")
+    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return end
+
+    -- Remove all control objects
+    for _, obj in ipairs(root:GetChildren()) do
+        if obj:IsA("BodyPosition") or obj:IsA("BodyGyro") or obj:IsA("BodyVelocity")
+        or obj:IsA("AlignPosition") or obj:IsA("AlignOrientation") or obj.Name == "BringValue" then
+            obj:Destroy()
+        end
+    end
+
+    -- Restore movement
+    hum.PlatformStand = false
+    hum.WalkSpeed = 16
+    hum.JumpPower = 50
+    hum.AutoRotate = true
+    hum:ChangeState(Enum.HumanoidStateType.Running)
+end
+
+local function ReturnAllBrought()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            ReturnPlayer(plr)
+        end
+    end
+end
+
+-- ✅ NEW BRING METHOD: Direct CFrame manipulation (works in EVERY game)
+local function BringPlayer(plr, index)
+    if not plr or not plr.Character then return end
+    local root = plr.Character:FindFirstChild("HumanoidRootPart")
+    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
+
+    -- Freeze movement input
+    hum.PlatformStand = true
+    hum.WalkSpeed = 0
+    hum.JumpPower = 0
+    hum.AutoRotate = false
+
+    -- Calculate position
+    local offset = -RootPart.CFrame.RightVector * Config.BringSpacing
+    local targetPos = RootPart.Position + offset * (index - 1) + Vector3.new(0, Config.BringHeight, 0)
+    local targetCFrame = CFrame.new(targetPos, RootPart.Position)
+
+    -- Direct set CFrame — no physics objects = no blocks
+    root.CFrame = targetCFrame
+end
+
+-- ======================================
+-- GUI BUILD
+-- ======================================
+local MainGui = Instance.new("ScreenGui")
+MainGui.Name = "LegitDatUI"
+MainGui.ResetOnSpawn = false
+MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+MainGui.Parent = PlayerGui
+
+local Main = Instance.new("Frame")
+Main.Name = "MainWindow"
+Main.Size = UDim2.new(0, Config.WindowWidth, 0, Config.WindowHeight)
+Main.Position = UDim2.new(0.5, -Config.WindowWidth / 2, 0.1, 0)
+Main.BackgroundColor3 = Config.Colors.Main
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Draggable = true
+Main.Visible = true
+Main.Parent = MainGui
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 14)
+
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Size = UDim2.new(1, 0, 0, 42)
+TitleBar.BackgroundColor3 = Config.Colors.Title
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = Main
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 14)
+
+local TitleText = Instance.new("TextLabel")
+TitleText.Size = UDim2.new(0.7, 0, 1, 0)
+TitleText.Position = UDim2.new(0, 16, 0, 0)
+TitleText.BackgroundTransparency = 1
+TitleText.Font = Enum.Font.GothamBold
+TitleText.TextSize = 18
+TitleText.TextColor3 = Config.Colors.Text
+TitleText.Text = Config.WindowTitle
+TitleText.TextXAlignment = Enum.TextXAlignment.Left
+TitleText.Parent = TitleBar
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 32, 0, 32)
+MinBtn.Position = UDim2.new(1, -76, 0.5, -16)
+MinBtn.BackgroundColor3 = Color3.fromRGB(210, 195, 170)
+MinBtn.Text = "−"
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 18
+MinBtn.TextColor3 = Config.Colors.Text
+MinBtn.BorderSizePixel = 0
+MinBtn.AutoButtonColor = false
+MinBtn.Parent = TitleBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 8)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 32, 0, 32)
+CloseBtn.Position = UDim2.new(1, -38, 0.5, -16)
+CloseBtn.BackgroundColor3 = Config.Colors.Red
+CloseBtn.Text = "×"
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 18
+CloseBtn.TextColor3 = Color3.new(1,1,1)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.AutoButtonColor = false
+CloseBtn.Parent = TitleBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
+
+local TabFrame = Instance.new("Frame")
+TabFrame.Size = UDim2.new(0.94, 0, 0, 36)
+TabFrame.Position = UDim2.new(0.03, 0, 0, 48)
+TabFrame.BackgroundColor3 = Config.Colors.TabInactive
+TabFrame.BorderSizePixel = 0
+TabFrame.Visible = true
+TabFrame.Parent = Main
+Instance.new("UICorner", TabFrame).CornerRadius = UDim.new(0, 8)
+
+local TabLayout = Instance.new("UIListLayout")
+TabLayout.FillDirection = Enum.FillDirection.Horizontal
+TabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+TabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+TabLayout.Padding = UDim.new(0, 6)
+TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TabLayout.Parent = TabFrame
+
+local function CreateTab(name, order)
+    local tab = Instance.new("TextButton")
+    tab.Name = name
+    tab.Size = UDim2.new(0.32, 0, 0.85, 0)
+    tab.BackgroundColor3 = order == 1 and Config.Colors.TabActive or Config.Colors.TabInactive
+    tab.Text = name
+    tab.Font = Enum.Font.GothamBold
+    tab.TextSize = 14
+    tab.TextColor3 = Config.Colors.Text
+    tab.BorderSizePixel = 0
+    tab.LayoutOrder = order
+    tab.AutoButtonColor = false
+    tab.Parent = TabFrame
+    Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 6)
+    return tab
+end
+
+local Tab_Main = CreateTab("Main", 1)
+local Tab_Players = CreateTab("Players", 2)
+local Tab_Settings = CreateTab("Settings", 3)
+
+local Content = Instance.new("ScrollingFrame")
+Content.Name = "ContentArea"
+Content.Size = UDim2.new(1, 0, 1, -92)
+Content.Position = UDim2.new(0, 0, 0, 92)
+Content.BackgroundTransparency = 1
+Content.BorderSizePixel = 0
+Content.ScrollBarThickness = 8
+Content.ScrollBarImageColor3 = Config.Colors.Accent
+Content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Content.CanvasSize = UDim2.new(0, 0, 0, 0)
+Content.Visible = true
+Content.Parent = Main
+
+local ContentLayout = Instance.new("UIListLayout")
+ContentLayout.Padding = UDim.new(0, 12)
+ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ContentLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+ContentLayout.Parent = Content
+
+ContentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    Content.CanvasSize = UDim2.new(0, 0, 0, ContentLayout.AbsoluteContentSize.Y + 20)
+end)
+
+local function ClearContent()
+    for _, child in ipairs(Content:GetChildren()) do
+        if child ~= ContentLayout and not child:IsA("UIListLayout") then
+            child:Destroy()
+        end
+    end
+end
+
+local function AddSection(name)
+    local sec = Instance.new("TextLabel")
+    sec.Size = UDim2.new(0.94, 0, 0, 30)
+    sec.BackgroundColor3 = Config.Colors.Section
+    sec.Text = name
+    sec.Font = Enum.Font.GothamBold
+    sec.TextSize = 15
+    sec.TextColor3 = Config.Colors.Text
+    sec.TextXAlignment = Enum.TextXAlignment.Left
+    sec.BorderSizePixel = 0
+    sec.LayoutOrder = #Content:GetChildren()
+    sec.Parent = Content
+    Instance.new("UICorner", sec).CornerRadius = UDim.new(0, 6)
+    local pad = Instance.new("UIPadding", sec)
+    pad.PaddingLeft = UDim.new(0, 12)
+    return sec
+end
+
+local function AddToggle(name, default, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0.94, 0, 0, 42)
+    container.BackgroundColor3 = Config.Colors.Element
+    container.BorderSizePixel = 0
+    container.LayoutOrder = #Content:GetChildren()
+    container.Parent = Content
+    Instance.new("UICorner", container).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.7, 0, 1, 0)
+    label.Position = UDim2.new(0, 12, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamSemibold
+    label.TextSize = 14
+    label.TextColor3 = Config.Colors.Text
+    label.Text = name
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = container
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 56, 0, 26)
+    btn.Position = UDim2.new(1, -68, 0.5, -13)
+    btn.BackgroundColor3 = default and Config.Colors.Green or Config.Colors.Red
+    btn.Text = default and "ON" or "OFF"
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = container
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    btn.MouseButton1Click:Connect(function()
+        default = not default
+        btn.Text = default and "ON" or "OFF"
+        btn.BackgroundColor3 = default and Config.Colors.Green or Config.Colors.Red
+        callback(default)
+    end)
+end
+
+local function AddKeybind(name, default, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0.94, 0, 0, 42)
+    container.BackgroundColor3 = Config.Colors.Element
+    container.BorderSizePixel = 0
+    container.LayoutOrder = #Content:GetChildren()
+    container.Parent = Content
+    Instance.new("UICorner", container).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.Position = UDim2.new(0, 12, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamSemibold
+    label.TextSize = 14
+    label.TextColor3 = Config.Colors.Text
+    label.Text = name
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = container
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 66, 0, 26)
+    btn.Position = UDim2.new(1, -78, 0.5, -13)
+    btn.BackgroundColor3 = Color3.fromRGB(225, 210, 190)
+    btn.Text = default.Name
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.TextColor3 = Config.Colors.Text
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = container
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+
+    local waiting = false
+    btn.MouseButton1Click:Connect(function()
+        if waiting then return end
+        waiting = true
+        btn.Text = "..."
+        btn.BackgroundColor3 = Config.Colors.Accent
+        local con
+        con = UserInputService.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseMovement or i.KeyCode == Enum.KeyCode.Unknown then return end
+            con:Disconnect()
+            waiting = false
+            local newKey = i.KeyCode
+            btn.Text = newKey.Name
+            btn.BackgroundColor3 = Color3.fromRGB(225, 210, 190)
+            callback(newKey)
+        end)
+    end)
+end
+
+local function AddSlider(name, default, min, max, callback)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0.94, 0, 0, 42)
+    container.BackgroundColor3 = Config.Colors.Element
+    container.BorderSizePixel = 0
+    container.LayoutOrder = #Content:GetChildren()
+    container.Parent = Content
+    Instance.new("UICorner", container).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.Position = UDim2.new(0, 12, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamSemibold
+    label.TextSize = 14
+    label.TextColor3 = Config.Colors.Text
+    label.Text = name
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = container
+
+    local input = Instance.new("TextBox")
+    input.Size = UDim2.new(0, 56, 0, 26)
+    input.Position = UDim2.new(1, -68, 0.5, -13)
+    input.BackgroundColor3 = Color3.fromRGB(235, 220, 200)
+    input.Text = tostring(default)
+    input.Font = Enum.Font.GothamBold
+    input.TextSize = 13
+    input.TextColor3 = Config.Colors.Text
+    input.ClearTextOnFocus = false
+    input.BorderSizePixel = 0
+    input.Parent = container
+    Instance.new("UICorner", input).CornerRadius = UDim.new(0, 6)
+
+    input.FocusLost:Connect(function()
+        local val = tonumber(input.Text)
+        if val ~= nil then val = math.clamp(val, min, max) else val = default end
+        input.Text = tostring(val)
+        callback(val)
+    end)
+end
+
+-- ======================================
+-- TAB CONTENT
+-- ======================================
+local function LoadMainTab()
+    ClearContent()
+
+    AddSection("MOVEMENT")
+    AddToggle("Flight", false, function(v)
+        Config.FlightActive = v
+        if v then
+            if not GetCharacter() then return end
+            Humanoid.PlatformStand = true
+            local bv = Instance.new("BodyVelocity", RootPart)
+            bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+            local bg = Instance.new("BodyGyro", RootPart)
+            bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+            bg.P = 9000
+            Loops.Flight = RunService.RenderStepped:Connect(function()
+                if not Config.FlightActive or not GetCharacter() then return end
+                local move = Vector3.new()
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += Camera.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= Camera.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= Camera.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += Camera.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move -= Vector3.new(0, 1, 0) end
+                local speed = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) and Config.FlightSpeed * Config.FlightBoost or Config.FlightSpeed
+                bv.Velocity = move.Magnitude > 0 and move.Unit * speed or Vector3.zero
+                bg.CFrame = CFrame.new(RootPart.Position, RootPart.Position + Camera.CFrame.LookVector)
+            end)
+        else
+            StopLoop(Loops.Flight)
+            if GetCharacter() then
+                Humanoid.PlatformStand = false
+                RootPart:FindFirstChildOfClass("BodyVelocity"):Destroy()
+                RootPart:FindFirstChildOfClass("BodyGyro"):Destroy()
+            end
+        end
+    end)
+    AddSlider("Flight Speed", Config.FlightSpeed, 20, 500, function(v) Config.FlightSpeed = v end)
+    AddSlider("Flight Boost", Config.FlightBoost, 1, 10, function(v) Config.FlightBoost = v end)
+
+    AddToggle("NoClip", false, function(v)
+        Config.NoClipActive = v
+        if v then
+            Loops.NoClip = RunService.Heartbeat:Connect(function()
+                if GetCharacter() then
+                    for _, part in ipairs(Character:GetDescendants()) do
+                        if part:IsA("BasePart") then part.CanCollide = false end
+                    end
+                end
+            end)
+        else
+            StopLoop(Loops.NoClip)
+            if GetCharacter() then
+                for _, part in ipairs(Character:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = true end
+                end
+            end
+        end
+    end)
+
+    AddSection("AIM ASSIST")
+    AddToggle("Aim Lock", false, function(v)
+        Config.AimLockEnabled = v
+        if not v then
+            Config.AimLockHeld = false
+            StopLoop(Loops.AimLock)
+        end
+    end)
+    AddToggle("Only Aim Visible Players", Config.AimOnlyVisible, function(v) Config.AimOnlyVisible = v end)
+    AddSlider("FOV Range", Config.AimFOV, 20, 180, function(v) Config.AimFOV = v end)
+    AddSlider("Smoothness", Config.AimSmooth, 0, 1, function(v) Config.AimSmooth = v end)
+    AddSlider("Max Range", Config.AimRange, 100, 3000, function(v) Config.AimRange = v end)
+
+    AddSection("PLAYER CONTROL")
+    AddToggle("Follow Selected", false, function(v)
+        Config.FollowActive = v
+        if v then
+            if #Config.SelectedTargets == 0 then
+                StarterGui:SetCore("SendNotification", {Title = "Follow", Text = "Select players first!", Duration = 2})
+                return
+            end
+            Loops.Follow = RunService.Heartbeat:Connect(function()
+                if not GetCharacter() or #Config.SelectedTargets == 0 then return end
+                local t = Config.SelectedTargets[1]
+                if not t or not t.Character then return end
+                local tr = t.Character:FindFirstChild("HumanoidRootPart")
+                if not tr then return end
+                RootPart.CFrame = CFrame.new(tr.Position + (RootPart.Position - tr.Position).Unit * Config.FollowDist + Vector3.new(0, 1.5, 0), tr.Position)
+            end)
+        else
+            StopLoop(Loops.Follow)
+        end
+    end)
+
+    AddSlider("Bring Spacing", Config.BringSpacing, 1, 15, function(v) Config.BringSpacing = v end)
+    AddSlider("Bring Height", Config.BringHeight, 0, 50, function(v) Config.BringHeight = v end)
+
+    -- ✅ Bring Selected — using direct CFrame method
+    AddToggle("Bring Selected", false, function(v)
+        Config.BringTargetActive = v
+        if v then
+            if #Config.SelectedTargets == 0 then
+                StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Select players in Players tab first!", Duration = 3})
+                return
+            end
+            if not GetCharacter() then
+                StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Load your character first!", Duration = 2})
+                return
+            end
+            ReturnAllBrought()
+            Loops.BringTarget = RunService.Heartbeat:Connect(function()
+                if not GetCharacter() then return end
+                for i, plr in ipairs(Config.SelectedTargets) do
+                    BringPlayer(plr, i)
+                end
+            end)
+            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring Selected ON", Duration = 2})
+        else
+            StopLoop(Loops.BringTarget)
+            ReturnAllBrought()
+            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring Selected OFF", Duration = 2})
+        end
+    end)
+
+    -- ✅ Bring All — using direct CFrame method
+    AddToggle("Bring All", false, function(v)
+        Config.BringAllActive = v
+        if v then
+            if not GetCharacter() then
+                StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Load your character first!", Duration = 2})
+                return
+            end
+            ReturnAllBrought()
+            Loops.BringAll = RunService.Heartbeat:Connect(function()
+                if not GetCharacter() then return end
+                local list = {}
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= LocalPlayer then table.insert(list, plr) end
+                end
+                for i, plr in ipairs(list) do
+                    BringPlayer(plr, i)
+                end
+            end)
+            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring All ON", Duration = 2})
+        else
+            StopLoop(Loops.BringAll)
+            ReturnAllBrought()
+            StarterGui:SetCore("SendNotification", {Title = "Bring", Text = "Bring All OFF", Duration = 2})
+        end
+    end)
+end
+
+local function LoadPlayersTab()
+    ClearContent()
+    AddSection("PLAYER LIST — SELECT & SPECTATE")
+    local listFrame = Instance.new("ScrollingFrame")
+    listFrame.Size = UDim2.new(0.94, 0, 0, 520)
+    listFrame.BackgroundColor3 = Config.Colors.Element
+    listFrame.BorderSizePixel = 0
+    listFrame.ScrollBarThickness = 6
+    listFrame.ScrollBarImageColor3 = Config.Colors.Accent
+    listFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    listFrame.LayoutOrder = #Content:GetChildren()
+    listFrame.Parent = Content
+    Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0, 6)
+
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.Padding = UDim.new(0, 4)
+    listLayout.SortOrder = Enum.SortOrder.Name
+    listLayout.Parent = listFrame
+
+    listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        listFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 10)
+    end)
+
+    local function RefreshPlayers()
+        for _, child in ipairs(listFrame:GetChildren()) do
+            if child ~= listLayout then child:Destroy() end
+        end
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr == LocalPlayer then continue end
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(0.96, 0, 0, 32)
+            row.BackgroundColor3 = table.find(Config.SelectedTargets, plr) and Config.Colors.Green or Color3.fromRGB(235, 225, 205)
+            row.BorderSizePixel = 0
+            row.Parent = listFrame
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+
+            local nameLabel = Instance.new("TextLabel")
+            nameLabel.Size = UDim2.new(0.55, 0, 1, 0)
+            nameLabel.Position = UDim2.new(0, 8, 0, 0)
+            nameLabel.BackgroundTransparency = 1
+            nameLabel.Font = Enum.Font.GothamSemibold
+            nameLabel.TextSize = 13
+            nameLabel.TextColor3 = Config.Colors.Text
+            nameLabel.Text = plr.DisplayName
+            nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+            nameLabel.Parent = row
+
+            local selectBtn = Instance.new("TextButton")
+            selectBtn.Size = UDim2.new(0.2, 0, 0.8, 0)
+            selectBtn.Position = UDim2.new(0.58, 0, 0.1, 0)
+            selectBtn.BackgroundColor3 = Color3.fromRGB(220, 205, 180)
+            selectBtn.Text = table.find(Config.SelectedTargets, plr) and "Selected" or "Select"
+            selectBtn.Font = Enum.Font.GothamBold
+            selectBtn.TextSize = 11
+            selectBtn.TextColor3 = Config.Colors.Text
+            selectBtn.BorderSizePixel = 0
+            selectBtn.Parent = row
+            Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 4)
+
+            local spectateBtn = Instance.new("TextButton")
+            spectateBtn.Size = UDim2.new(0.2, 0, 0.8, 0)
+            spectateBtn.Position = UDim2.new(0.8, 0, 0.1, 0)
+            spectateBtn.BackgroundColor3 = Color3.fromRGB(220, 205, 180)
+            spectateBtn.Text = "Spectate"
+            spectateBtn.Font = Enum.Font.GothamBold
+            spectateBtn.TextSize = 11
+            spectateBtn.TextColor3 = Config.Colors.Text
+            spectateBtn.BorderSizePixel = 0
+            spectateBtn.Parent = row
+            Instance.new("UICorner", spectateBtn).CornerRadius = UDim.new(0, 4)
+
+            selectBtn.MouseButton1Click:Connect(function()
+                local idx = table.find(Config.SelectedTargets, plr)
+                if idx then
+                    table.remove(Config.SelectedTargets, idx)
+                    row.BackgroundColor3 = Color3.fromRGB(235, 225, 205)
+                    selectBtn.Text = "Select"
+                else
+                    table.insert(Config.SelectedTargets, plr)
+                    row.BackgroundColor3 = Config.Colors.Green
+                    selectBtn.Text = "Selected"
+                end
+            end)
+
+            spectateBtn.MouseButton1Click:Connect(function()
+                if Config.Spectating and Config.CurrentSpectate == plr then
+                    StopSpectate()
+                    spectateBtn.Text = "Spectate"
+                    spectateBtn.BackgroundColor3 = Color3.fromRGB(220, 205, 180)
+                    return
+                end
+                if not plr.Character or not plr.Character:FindFirstChild("Humanoid") then
+                    StarterGui:SetCore("SendNotification", {Title = "Legit Dat", Text = "Player not loaded", Duration = 2})
+                    return
+                end
+                StopSpectate()
+                OriginalCameraType = Camera.CameraType
+                OriginalCameraSubject = Camera.CameraSubject
+                Camera.CameraType = Enum.CameraType.Custom
+                Camera.CameraSubject = plr.Character:FindFirstChild("Humanoid")
+                Config.Spectating = true
+                Config.CurrentSpectate = plr
+                spectateBtn.Text = "Stop"
+                spectateBtn.BackgroundColor3 = Config.Colors.Red
+                StarterGui:SetCore("SendNotification", {Title = "Legit Dat", Text = "Spectating: " .. plr.DisplayName, Duration = 2})
+            end)
+        end
+    end
+    RefreshPlayers()
+    Players.PlayerAdded:Connect(RefreshPlayers)
+    Players.PlayerRemoving:Connect(function(plr)
+        local idx = table.find(Config.SelectedTargets, plr)
+        if idx then table.remove(Config.SelectedTargets, idx) end
+        RefreshPlayers()
+    end)
+end
+
+local function LoadSettingsTab()
+    ClearContent()
+    AddSection("MENU SETTINGS")
+    AddKeybind("Menu Toggle Key", Config.MenuToggleKey, function(v) Config.MenuToggleKey = v end)
+    AddToggle("Draggable Menu", true, function(v) Main.Draggable = v end)
+    AddSlider("Menu Opacity", 1, 0.2, 1, function(v)
+        Main.BackgroundTransparency = 1 - v
+        TitleBar.BackgroundTransparency = 1 - v
+    end)
+
+    AddSection("KEYBINDS")
+    AddKeybind("Flight Key", Config.FlightKey, function(v) Config.FlightKey = v end)
+    AddKeybind("NoClip Key", Config.NoClipKey, function(v) Config.NoClipKey = v end)
+    AddKeybind("Follow Key", Config.FollowKey, function(v) Config.FollowKey = v end)
+    AddKeybind("Bring Selected Key", Config.BringTargetKey, function(v) Config.BringTargetKey = v end)
+    AddKeybind("Bring All Key", Config.BringAllKey, function(v) Config.BringAllKey = v end)
+end
+
+-- ======================================
+-- TAB SWITCH & INPUT
+-- ======================================
+local function SwitchTab(tabName)
+    Config.CurrentTab = tabName
+    Tab_Main.BackgroundColor3 = tabName == "Main" and Config.Colors.TabActive or Config.Colors.TabInactive
+    Tab_Players.BackgroundColor3 = tabName == "Players" and Config.Colors.TabActive or Config.Colors.TabInactive
+    Tab_Settings.BackgroundColor3 = tabName == "Settings" and Config.Colors.TabActive or Config.Colors.TabInactive
+
+    if tabName == "Main" then LoadMainTab()
+    elseif tabName == "Players" then LoadPlayersTab()
+    elseif tabName == "Settings" then LoadSettingsTab() end
+end
+
+Tab_Main.MouseButton1Click:Connect(function() SwitchTab("Main") end)
+Tab_Players.MouseButton1Click:Connect(function() SwitchTab("Players") end)
+Tab_Settings.MouseButton1Click:Connect(function() SwitchTab("Settings") end)
+
+MinBtn.MouseButton1Click:Connect(function()
+    local isMin = Main.Size.Y.Offset == 42
+    if isMin then
+        Main.Size = UDim2.new(0, Config.WindowWidth, 0, Config.WindowHeight)
+        TabFrame.Visible = true
+        Content.Visible = true
+        MinBtn.Text = "−"
+    else
+        Main.Size = UDim2.new(0, Config.WindowWidth, 0, 42)
+        TabFrame.Visible = false
+        Content.Visible = false
+        MinBtn.Text = "+"
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(i, processed)
+    if processed then return end
+    if i.KeyCode == Config.MenuToggleKey then
+        Config.MenuVisible = not Config.MenuVisible
+        Main.Visible = Config.MenuVisible
+        StarterGui:SetCore("SendNotification", {Title = "Menu", Text = Config.MenuVisible and "Opened" or "Closed", Duration = 1})
+        return
+    end
+    if i.KeyCode == Enum.KeyCode.Escape and Config.Spectating then
+        StopSpectate()
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton2 then
+        if Config.AimLockEnabled then
+            Config.AimLockHeld = true
+            Loops.AimLock = RunService.RenderStepped:Connect(function()
+                local target = GetClosestPlayer()
+                if target then
+                    Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), Config.AimSmooth)
+                end
+            end)
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton2 then
+        Config.AimLockHeld = false
+        StopLoop(Loops.AimLock)
+    end
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    StopSpectate()
+    ReturnAllBrought()
+    for _, loop in pairs(Loops) do StopLoop(loop) end
+    MainGui:Destroy()
+end)
+
+-- Load default tab
+SwitchTab("Main")
