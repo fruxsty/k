@@ -32,13 +32,11 @@ local Config = {
         Red = Color3.fromRGB(180, 70, 60),
         Line = Color3.fromRGB(220, 180, 120)
     },
-    -- Keybinds
     FlightKey = Enum.KeyCode.F,
     NoClipKey = Enum.KeyCode.N,
     FollowKey = Enum.KeyCode.H,
     BringTargetKey = Enum.KeyCode.T,
     BringAllKey = Enum.KeyCode.Z,
-
     FlightActive = false,
     FlightSpeed = 60,
     FlightBoost = 2.5,
@@ -128,14 +126,12 @@ local function StopSpectate()
     end
 end
 
--- ✅ Reset player properly
 local function ReturnPlayer(plr)
     if not plr or not plr.Character then return end
     local root = plr.Character:FindFirstChild("HumanoidRootPart")
     local hum = plr.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum then return end
 
-    -- Remove all control objects
     for _, obj in ipairs(root:GetChildren()) do
         if obj:IsA("BodyPosition") or obj:IsA("BodyGyro") or obj:IsA("BodyVelocity")
         or obj:IsA("AlignPosition") or obj:IsA("AlignOrientation") or obj.Name == "BringValue" then
@@ -143,7 +139,6 @@ local function ReturnPlayer(plr)
         end
     end
 
-    -- Restore movement
     hum.PlatformStand = false
     hum.WalkSpeed = 16
     hum.JumpPower = 50
@@ -159,31 +154,24 @@ local function ReturnAllBrought()
     end
 end
 
--- ✅ NEW BRING METHOD: Direct CFrame manipulation (works in EVERY game)
 local function BringPlayer(plr, index)
     if not plr or not plr.Character then return end
     local root = plr.Character:FindFirstChild("HumanoidRootPart")
     local hum = plr.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return end
 
-    -- Freeze movement input
     hum.PlatformStand = true
     hum.WalkSpeed = 0
     hum.JumpPower = 0
     hum.AutoRotate = false
 
-    -- Calculate position
     local offset = -RootPart.CFrame.RightVector * Config.BringSpacing
     local targetPos = RootPart.Position + offset * (index - 1) + Vector3.new(0, Config.BringHeight, 0)
     local targetCFrame = CFrame.new(targetPos, RootPart.Position)
 
-    -- Direct set CFrame — no physics objects = no blocks
     root.CFrame = targetCFrame
 end
 
--- ======================================
--- GUI BUILD
--- ======================================
 local MainGui = Instance.new("ScreenGui")
 MainGui.Name = "LegitDatUI"
 MainGui.ResetOnSpawn = false
@@ -468,9 +456,6 @@ local function AddSlider(name, default, min, max, callback)
     end)
 end
 
--- ======================================
--- TAB CONTENT
--- ======================================
 local function LoadMainTab()
     ClearContent()
 
@@ -567,7 +552,6 @@ local function LoadMainTab()
     AddSlider("Bring Spacing", Config.BringSpacing, 1, 15, function(v) Config.BringSpacing = v end)
     AddSlider("Bring Height", Config.BringHeight, 0, 50, function(v) Config.BringHeight = v end)
 
-    -- ✅ Bring Selected — using direct CFrame method
     AddToggle("Bring Selected", false, function(v)
         Config.BringTargetActive = v
         if v then
@@ -594,7 +578,6 @@ local function LoadMainTab()
         end
     end)
 
-    -- ✅ Bring All — using direct CFrame method
     AddToggle("Bring All", false, function(v)
         Config.BringAllActive = v
         if v then
@@ -757,9 +740,6 @@ local function LoadSettingsTab()
     AddKeybind("Bring All Key", Config.BringAllKey, function(v) Config.BringAllKey = v end)
 end
 
--- ======================================
--- TAB SWITCH & INPUT
--- ======================================
 local function SwitchTab(tabName)
     Config.CurrentTab = tabName
     Tab_Main.BackgroundColor3 = tabName == "Main" and Config.Colors.TabActive or Config.Colors.TabInactive
@@ -831,5 +811,4 @@ CloseBtn.MouseButton1Click:Connect(function()
     MainGui:Destroy()
 end)
 
--- Load default tab
 SwitchTab("Main")
